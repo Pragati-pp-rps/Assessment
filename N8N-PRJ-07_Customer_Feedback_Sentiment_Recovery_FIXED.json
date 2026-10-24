@@ -1,0 +1,415 @@
+{
+  "name": "N8N-PRJ-07 Customer Feedback Sentiment and Recovery",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "v1/customer-feedback",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d6a04032-5e24-41db-a1d1-e2f443397e8a",
+      "name": "Customer Feedback Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1024,
+        192
+      ],
+      "webhookId": "6229f5cd-7b85-46a1-909f-7b9a3ba9596e"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst items = $input.all();\n\nreturn items.map((item) => {\n\n  // Get incoming Webhook data\n  let body = item.json.body ?? item.json;\n\n  // Handle JSON body received as a string\n  if (typeof body === \"string\") {\n    try {\n      body = JSON.parse(body);\n    } catch (error) {\n      throw new Error(\"Webhook body is not valid JSON\");\n    }\n  }\n\n  // Extract customer information\n  const customer_name = String(\n    body.customer_name ??\n    body.customerName ??\n    body.name ??\n    \"\"\n  ).trim();\n\n  const email = String(\n    body.email ??\n    body.customerEmail ??\n    \"\"\n  ).trim();\n\n  const feedback_text = String(\n    body.feedback_text ??\n    body.feedbackText ??\n    body.feedback ??\n    body.comment ??\n    \"\"\n  ).trim();\n\n  // Get rating\n  const rawRating =\n    body.rating ??\n    body.customerRating ??\n    body.score;\n\n  // Validate rating\n  if (\n    rawRating === undefined ||\n    rawRating === null ||\n    String(rawRating).trim() === \"\"\n  ) {\n    throw new Error(\n      \"Rating missing from Webhook. Received fields: \" +\n      Object.keys(body).join(\", \")\n    );\n  }\n\n  const rating = Number(rawRating);\n\n  if (\n    !Number.isInteger(rating) ||\n    rating < 1 ||\n    rating > 5\n  ) {\n    throw new Error(\n      \"Rating must be an integer between 1 and 5\"\n    );\n  }\n\n  // Validate customer details\n  if (!customer_name) {\n    throw new Error(\"Customer name is required\");\n  }\n\n  if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {\n    throw new Error(\"Valid email is required\");\n  }\n\n  if (!feedback_text) {\n    throw new Error(\"Feedback text is required\");\n  }\n\n  // Generate feedback ID\n  const now = new Date();\n\n  const date = now.toISOString()\n    .slice(0, 10)\n    .replace(/-/g, \"\");\n\n  const suffix = Math.floor(\n    1000 + Math.random() * 9000\n  );\n\n  const feedback_id = `FBK-${date}-${suffix}`;\n\n  // Sentiment calculation\n  const sentiment =\n    rating >= 4\n      ? \"PROMOTER\"\n      : rating <= 2\n        ? \"DETRACTOR\"\n        : \"NEUTRAL\";\n\n  // Follow-up status\n  const follow_up_status =\n    rating <= 2\n      ? \"Escalated\"\n      : \"Completed\";\n\n  return {\n    json: {\n      feedback_id,\n      customer_name,\n      email,\n      rating,\n      feedback_text,\n      sentiment,\n      submitted_at: now.toISOString(),\n      follow_up_status\n    }\n  };\n\n});\n"
+      },
+      "id": "4acb84a0-5b04-4c32-9aad-48e692ee531d",
+      "name": "Validate and Score Feedback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -784,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Customer_Feedback_Repository",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Feedback_ID": "={{ $json.feedback_id }}",
+            "Submitted_At": "={{ $json.submitted_at }}",
+            "Customer_Name": "={{ $json.customer_name }}",
+            "Customer_Email": "={{ $json.email }}",
+            "Rating": "={{ $json.rating }}",
+            "Feedback_Text": "={{ $json.feedback_text }}",
+            "Sentiment_Type": "={{ $json.sentiment }}",
+            "Follow_Up_Status": "={{ $json.follow_up_status }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "d14d50ab-fbc1-4dd9-be78-ee21c0a0ce76",
+      "name": "Append Feedback to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -544,
+        192
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "rp5rh5WSxIAaLl56",
+          "name": "Pragati Google Sheet"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $(\"Validate and Score Feedback\").item.json.rating }}",
+              "rightValue": 4,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b0beab51-7aff-483a-8655-7b166c81d6fa",
+      "name": "Rating 4 or 5?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -288,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $(\"Validate and Score Feedback\").item.json.rating }}",
+              "rightValue": 2,
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "311454ac-c542-46fe-bcf3-90c2090c2846",
+      "name": "Rating 1 or 2?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -48,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $(\"Validate and Score Feedback\").item.json.email }}",
+        "subject": "Thank you for your feedback!",
+        "message": "=<p>Hi {{ $(\"Validate and Score Feedback\").item.json.customer_name }},</p><p>Thank you for your wonderful feedback. We appreciate your support!</p><p>If you have a moment, please share your experience in a public review: REPLACE_WITH_GOOGLE_REVIEW_LINK</p><p>Best regards,<br>Customer Success Team</p>",
+        "options": {}
+      },
+      "id": "cfd6e0f0-56a6-4b55-8d04-aa7bcaf78cab",
+      "name": "Promoter Thank You",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "6d269de1-ab7f-46e3-a699-e3ea69b86800",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "88CctcJ5YtJ1umXl",
+          "name": "Pragati Gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $(\"Validate and Score Feedback\").item.json.email }}",
+        "subject": "We are sorry - your feedback has been escalated",
+        "message": "=<p>Hi {{ $(\"Validate and Score Feedback\").item.json.customer_name }},</p><p>We sincerely apologize for your experience. Your feedback has been escalated to our support team for prompt review.</p><p>Your reference: {{ $(\"Validate and Score Feedback\").item.json.feedback_id }}</p><p>Customer Success Team</p>",
+        "options": {}
+      },
+      "id": "c4dc7a3b-1d74-45ba-9ba3-0f3aa7880f28",
+      "name": "Customer Apology",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        224,
+        240
+      ],
+      "webhookId": "56c93a87-c99a-42de-bc01-437721277ae7",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "88CctcJ5YtJ1umXl",
+          "name": "Pragati Gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "support-manager@company.com",
+        "subject": "=URGENT: Customer feedback {{ $(\"Validate and Score Feedback\").item.json.feedback_id }}",
+        "message": "=<p>Urgent service recovery needed.</p><p>Customer: {{ $(\"Validate and Score Feedback\").item.json.customer_name }}<br>Email: {{ $(\"Validate and Score Feedback\").item.json.email }}<br>Rating: {{ $(\"Validate and Score Feedback\").item.json.rating }}<br>Feedback: {{ $(\"Validate and Score Feedback\").item.json.feedback_text }}</p>",
+        "options": {}
+      },
+      "id": "098b60e2-4a2c-4e0c-99ac-d33cf35e9ee4",
+      "name": "Urgent Support Manager Alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        464,
+        240
+      ],
+      "webhookId": "ef2263e7-1813-4d2d-b22c-f9237d8e03c3",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "88CctcJ5YtJ1umXl",
+          "name": "Pragati Gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $(\"Validate and Score Feedback\").item.json.email }}",
+        "subject": "Thank you for sharing your feedback",
+        "message": "=<p>Hi {{ $(\"Validate and Score Feedback\").item.json.customer_name }},</p><p>Thank you for taking the time to share your feedback. We value your input and will use it to improve our service.</p><p>Customer Success Team</p>",
+        "options": {}
+      },
+      "id": "7b374b2f-cce0-46ae-83d8-b43b8eee53ba",
+      "name": "Neutral Thank You",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        224,
+        496
+      ],
+      "webhookId": "d6d1116e-aba6-4029-9419-94e5683591f8",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "88CctcJ5YtJ1umXl",
+          "name": "Pragati Gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: \"recorded\", feedback_id: $(\"Validate and Score Feedback\").item.json.feedback_id } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "e0050fd2-93ec-49e8-a2e1-5a13184ea5aa",
+      "name": "Respond Promoter",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        256,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: \"recorded\", feedback_id: $(\"Validate and Score Feedback\").item.json.feedback_id } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "3830f9b7-2f56-4f71-bfa9-9cee1152b4c8",
+      "name": "Respond Detractor",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        704,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: \"recorded\", feedback_id: $(\"Validate and Score Feedback\").item.json.feedback_id } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a0f4b580-2a27-4649-806a-c4197510f8be",
+      "name": "Respond Neutral",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        464,
+        496
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Customer Feedback Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate and Score Feedback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and Score Feedback": {
+      "main": [
+        [
+          {
+            "node": "Append Feedback to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Feedback to Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Rating 4 or 5?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Promoter Thank You": {
+      "main": [
+        [
+          {
+            "node": "Respond Promoter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Customer Apology": {
+      "main": [
+        [
+          {
+            "node": "Urgent Support Manager Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Urgent Support Manager Alert": {
+      "main": [
+        [
+          {
+            "node": "Respond Detractor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Neutral Thank You": {
+      "main": [
+        [
+          {
+            "node": "Respond Neutral",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rating 4 or 5?": {
+      "main": [
+        [
+          {
+            "node": "Promoter Thank You",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rating 1 or 2?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rating 1 or 2?": {
+      "main": [
+        [
+          {
+            "node": "Customer Apology",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Neutral Thank You",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "04057ee9-d17e-42b4-9095-741c325c4060",
+  "meta": {
+    "instanceId": "a03c7678428ef19ededbf912f16f7d5798ec7b9ab4c17f2a2def6a9e791e7215"
+  },
+  "nodeGroups": [],
+  "id": "PwW7aOXhApZVQGfS",
+  "tags": []
+}
